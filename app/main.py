@@ -1,69 +1,50 @@
-import socket
-from dataclasses import dataclass
-from enum import Enum, unique
-
-
-@unique
-class ErrorCode(Enum):
-    NONE = 0
+import socket  # noqa: F401
+import threading
+from enum import Enum
+MIN_API_VER = 0
+MAX_API_VER = 4
+class RespErrCode(Enum):
+    NO_ERROR = 0
     UNSUPPORTED_VERSION = 35
-
-
-@dataclass
-class KafkaRequest:
-    api_key: int
-    api_version: int
-    correlation_id: int
-
-    @staticmethod
-    def from_client(client: socket.socket):
-        data = client.recv(2048)
-        return KafkaRequest(
-            api_key=int.from_bytes(data[4:6]),
-            api_version=int.from_bytes(data[6:8]),
-            correlation_id=int.from_bytes(data[8:12]),
-        )
-
-
-def make_response(request: KafkaRequest):
-    response_header = request.correlation_id.to_bytes(4)
-
-    valid_api_versions = [0, 1, 2, 3, 4]
-    error_code = (
-        ErrorCode.NONE
-        if request.api_version in valid_api_versions
-        else ErrorCode.UNSUPPORTED_VERSION
-    )
-    min_version, max_version = 0, 4
+def build_resp(correlation_id: int, api_key: int, api_version: int):
+    header = correlation_id.to_bytes(4)
+    TAG_BUFFER = (0).to_bytes(1)
+    err_code = RespErrCode.NO_ERROR.value
+    if not (MIN_API_VER <= api_version <= MAX_API_VER):
+        err_code = RespErrCode.UNSUPPORTED_VERSION.value
+    num_api_keys = 1
     throttle_time_ms = 0
-    tag_buffer = b"\x00"
-    response_body = (
-        error_code.value.to_bytes(2) +
-        int(2).to_bytes(1) +
-        request.api_key.to_bytes(2) +
-        min_version.to_bytes(2) +
-        max_version.to_bytes(2) +
-        tag_buffer +
-        throttle_time_ms.to_bytes(4) +
-        tag_buffer
+    body = (
+        err_code.to_bytes(2)
+        + (num_api_keys + 1).to_bytes(1)
+        + api_key.to_bytes(2)
+        + MIN_API_VER.to_bytes(2)
+        + MAX_API_VER.to_bytes(2)
+        + TAG_BUFFER
+        + throttle_time_ms.to_bytes(4)
+        + TAG_BUFFER
     )
+    resp = header + body
+    resp = len(resp).to_bytes(4) + resp
+    return resp
+def api_versions_resp(request: bytes):
+    _, header = request[:4], request[4:]
+    req_api_key = int.from_bytes(header[:2])
+    req_api_version = int.from_bytes(header[2:4])
+    correlation_id = int.from_bytes(header[4:8])
+    return build_resp(correlation_id, req_api_key, req_api_version)
 
-    response_length = len(response_header) + len(response_body)
-    return int(response_length).to_bytes(4) + response_header + response_body
-
-
+def respond(client: socket.socket):
+    while True:
+        req = client.recv(1024)
+        resp = api_versions_resp(req)
+        client.send(resp)
 def main():
     server = socket.create_server(("localhost", 9092), reuse_port=True)
-    client, _ = server.accept()
-    # request = KafkaRequest.from_client(client)
-    # print(request)
-    # client.sendall(make_response(request))
     while True:
-        request = KafkaRequest.from_client(client)
-        print(request)
-        client.sendall(make_response(request))
-
-
-
+        client, addr = server.accept()
+        t = threading.Thread(target=respond, args=(client,))
+        t.start()
 if __name__ == "__main__":
     main()
+
