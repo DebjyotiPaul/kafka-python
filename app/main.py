@@ -55,9 +55,14 @@ def make_response(request: KafkaRequest):
 def main():
     server = socket.create_server(("localhost", 9092), reuse_port=True)
     client, _ = server.accept()
-    request = KafkaRequest.from_client(client)
-    print(request)
-    client.sendall(make_response(request))
+    # request = KafkaRequest.from_client(client)
+    # print(request)
+    # client.sendall(make_response(request))
+    while True:
+        request = KafkaRequest.from_client(client)
+        print(request)
+        client.sendall(make_response(request))
+
 
 
 if __name__ == "__main__":
