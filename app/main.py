@@ -1,50 +1,72 @@
 import socket  # noqa: F401
+import struct
 import threading
-from enum import Enum
-MIN_API_VER = 0
-MAX_API_VER = 4
-class RespErrCode(Enum):
-    NO_ERROR = 0
-    UNSUPPORTED_VERSION = 35
-def build_resp(correlation_id: int, api_key: int, api_version: int):
-    header = correlation_id.to_bytes(4)
-    TAG_BUFFER = (0).to_bytes(1)
-    err_code = RespErrCode.NO_ERROR.value
-    if not (MIN_API_VER <= api_version <= MAX_API_VER):
-        err_code = RespErrCode.UNSUPPORTED_VERSION.value
-    num_api_keys = 1
-    throttle_time_ms = 0
-    body = (
-        err_code.to_bytes(2)
-        + (num_api_keys + 1).to_bytes(1)
-        + api_key.to_bytes(2)
-        + MIN_API_VER.to_bytes(2)
-        + MAX_API_VER.to_bytes(2)
-        + TAG_BUFFER
-        + throttle_time_ms.to_bytes(4)
-        + TAG_BUFFER
-    )
-    resp = header + body
-    resp = len(resp).to_bytes(4) + resp
-    return resp
-def api_versions_resp(request: bytes):
-    _, header = request[:4], request[4:]
-    req_api_key = int.from_bytes(header[:2])
-    req_api_version = int.from_bytes(header[2:4])
-    correlation_id = int.from_bytes(header[4:8])
-    return build_resp(correlation_id, req_api_key, req_api_version)
 
-def respond(client: socket.socket):
+
+SUPPORTED_VERSIONS = {0, 1, 2, 3, 4}
+ERROR_CODE_UNSUPPORTED_VERSION = 35  # Error code for unsupported version
+
+
+def handle_client(clientsocket, addr):
     while True:
-        req = client.recv(1024)
-        resp = api_versions_resp(req)
-        client.send(resp)
+        data = clientsocket.recv(1024)
+        print(data)
+        mlen = int.from_bytes(data[:4], byteorder="big") # 4 bytes
+        request_api_key = int.from_bytes(data[4:6], byteorder="big") # 2 bytes
+        request_api_version = int.from_bytes(data[6:8], byteorder="big") # 2 bytes
+        correlation_id = int.from_bytes(data[8:12], byteorder="big") # 4 bytes
+    
+        print(f"message_length: {mlen} \n request_api_key: {request_api_key} \n" +
+                f"request_api_version: {request_api_version}\n" +
+                f"correlation_id: {correlation_id}")
+        if data:
+            correlation_id = correlation_id.to_bytes(4, byteorder="big")
+            print(f"correlation_id: {correlation_id}")
+
+            response = correlation_id
+
+            if request_api_version not in SUPPORTED_VERSIONS:
+                response += ERROR_CODE_UNSUPPORTED_VERSION.to_bytes(2, byteorder="big")
+            else: 
+                response += int(0).to_bytes(2, byteorder="big")
+            
+            print(f"response: {response}") 
+            response += int(3).to_bytes(1, byteorder="big") # num api keys
+            response += request_api_key.to_bytes(2, byteorder="big")
+            response += request_api_version.to_bytes(2, byteorder="big")
+            response += request_api_version.to_bytes(2, byteorder="big")
+            response += int(0).to_bytes(1, byteorder="big") # tag buffer
+
+            response += int(1).to_bytes(2, byteorder="big")
+            response += int(16).to_bytes(2, byteorder="big")
+            response += int(16).to_bytes(2, byteorder="big")
+            response += int(0).to_bytes(1, byteorder="big") # tag buffer
+            
+            response += int(0).to_bytes(4, byteorder="big") # throttle
+            response += int(0).to_bytes(1, byteorder="big") # tag buffer
+
+            print(f"response: {response}") 
+            message_length = len(response).to_bytes(4, byteorder="big")
+            response = message_length + response
+            print(f"response sent: {response}")
+            clientsocket.sendall(response)
+
+
 def main():
+    # You can use print statements as follows for debugging,
+    # they'll be visible when running tests.
+    print("Logs from your program will appear here!")
+
+    # Uncomment this to pass the first stage
+    #
     server = socket.create_server(("localhost", 9092), reuse_port=True)
+
     while True:
-        client, addr = server.accept()
-        t = threading.Thread(target=respond, args=(client,))
-        t.start()
+        (clientsocket, address)  = server.accept() # wait for client
+        if clientsocket:
+            print(f"connect by {address}")
+            client_thread = threading.Thread(target=handle_client, args=(clientsocket, address))
+            client_thread.start()  # Start the thread
+
 if __name__ == "__main__":
     main()
-
